@@ -139,7 +139,7 @@ def iface_scan(iface):
 
 def select_target(mon_iface):
     '''
-    Get wash output
+    Run and parse wash to gather WPS APs, then prompt user for target
     '''
     output = []
     filename = 'wash.log'
@@ -156,7 +156,7 @@ def select_target(mon_iface):
                 time.sleep(.25)
     except KeyboardInterrupt:
         choice = raw_input('[*] Enter the number of your choice: ')
-        return output, targets[choice]
+        return targets[choice]
 
 def print_targets(output):
     '''
@@ -219,7 +219,7 @@ def cleanup(orig_mac, mon_iface):
 def main():
     args = parse_args()
     orig_mac, mon_iface = get_mon_iface(args)
-    out, target = select_target(mon_iface)
+    target = select_target(mon_iface)
     mac, chan, locked, essid = target
     print 'You chose:', mac, chan, locked, essid
     cleanup(orig_mac, mon_iface)
