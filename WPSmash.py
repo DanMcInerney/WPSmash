@@ -183,7 +183,7 @@ def cleanup(orig_mac, mon_iface):
     os.system('/sbin/ip link set dev {} address {}'.format(mon_iface, orig_mac))
     os.system('iwconfig %s mode managed' % mon_iface)
     os.system('ifconfig %s up' % mon_iface)
-#    os.system('service network-manager restart')
+    os.system('service network-manager restart')
     os.system('rm wash.log')
     sys.exit('\n['+R+'!'+W+'] Closing...')
 
