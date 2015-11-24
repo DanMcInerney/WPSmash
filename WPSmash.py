@@ -219,8 +219,7 @@ def cleanup(orig_mac, mon_iface):
 def main():
     args = parse_args()
     orig_mac, mon_iface = get_mon_iface(args)
-    target = select_target(mon_iface)
-    mac, chan, locked, essid = target
+    mac, chan, locked, essid = select_target(mon_iface)
     print 'You chose:', mac, chan, locked, essid
     cleanup(orig_mac, mon_iface)
 
