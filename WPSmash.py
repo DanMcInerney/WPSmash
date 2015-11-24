@@ -158,6 +158,23 @@ def select_target(mon_iface):
         choice = raw_input('[*] Enter the number of your choice: ')
         return targets[choice]
 
+def get_streaming_output(filename, cmd, parse_output, *args):
+    '''
+    Run and parse wash to gather WPS APs, then prompt user for target
+    '''
+    output = []
+    with io.open(filename, 'wb') as writer, io.open(filename, 'rb', 1) as reader:
+        print '[*] Running `{}`'.format(cmd)
+        proc = Popen(cmd.split(), stdout=writer)
+        # wash never stops
+        try:
+            while proc.poll() is None:
+                output += reader.readlines()
+                results = parse_output(output)
+                time.sleep(.25)
+        except KeyboardInterrupt:
+            return results
+
 def print_targets(output):
     '''
     Print the targets and return them in a dict
